@@ -41,6 +41,8 @@
 [osd]
 {{range gets "/osd/*"}}
   {{base .Key}} = {{.Value}}{{end}}
+  osd max object name len = 256
+  osd max object namespace len = 64
 
 [mds]
 {{range gets "/mds/*"}}
