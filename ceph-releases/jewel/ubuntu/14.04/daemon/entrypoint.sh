@@ -275,6 +275,61 @@ function osd_directory_single {
   # make sure ceph owns the directory
   chown -R ceph. /var/lib/ceph/osd
 
+	# check if anything is there, if not create an osd with directory
+	if [[ -n "$(find /var/lib/ceph/osd -prune -empty)" ]]; then
+		echo "Creating osd with ceph --cluster ${CLUSTER} osd create"
+		OSD_ID=$(ceph --cluster ${CLUSTER} osd create)
+		if [ "$OSD_ID" -eq "$OSD_ID" ] 2>/dev/null; then
+				echo "OSD created with ID: ${OSD_ID}"
+		else
+			echo "OSD creation failed: ${OSD_ID}"
+			exit 1
+		fi
+
+		# create the folder and own it
+		mkdir -p /var/lib/ceph/osd/${CLUSTER}-${OSD_ID}
+		chown ceph. /var/lib/ceph/osd/${CLUSTER}-${OSD_ID}
+		echo "created folder /var/lib/ceph/osd/${CLUSTER}-${OSD_ID}"
+
+		# find journal dir
+		if [ -n "${JOURNAL_DIR}" ]; then
+			 OSD_J="${JOURNAL_DIR}/journal.${OSD_ID}"
+			 chown -R ceph. ${JOURNAL_DIR}
+		else
+			 if [ -n "${JOURNAL}" ]; then
+					OSD_J=${JOURNAL}
+					chown -R ceph. $(dirname ${JOURNAL_DIR})
+			 else
+					OSD_J=/var/lib/ceph/osd/${CLUSTER}-${OSD_ID}/journal
+			 fi
+		fi
+
+		chown ceph. /var/lib/ceph/osd/${CLUSTER}-${OSD_ID}
+		# Create OSD key and file structure
+		ceph-osd ${CEPH_OPTS} -i $OSD_ID --mkfs --mkkey --mkjournal --osd-journal ${OSD_J} --setuser ceph --setgroup ceph
+
+		if [ ! -e /var/lib/ceph/bootstrap-osd/${CLUSTER}.keyring ]; then
+			echo "ERROR- /var/lib/ceph/bootstrap-osd/${CLUSTER}.keyring must exist. You can extract it from your current monitor by running 'ceph auth get client.bootstrap-osd -o /var/lib/ceph/bootstrap-osd/${CLUSTER}.keyring'"
+			exit 1
+		fi
+
+		timeout 10 ceph ${CEPH_OPTS} --name client.bootstrap-osd --keyring /var/lib/ceph/bootstrap-osd/${CLUSTER}.keyring health || exit 1
+
+		# Add the OSD key
+		ceph ${CEPH_OPTS} --name client.bootstrap-osd --keyring /var/lib/ceph/bootstrap-osd/${CLUSTER}.keyring auth add osd.${OSD_ID} -i /var/lib/ceph/osd/${CLUSTER}-${OSD_ID}/keyring osd 'allow *' mon 'allow profile osd'  || echo $1
+		echo "done adding key"
+		chown ceph. /var/lib/ceph/osd/${CLUSTER}-${OSD_ID}/keyring
+		chmod 0600 /var/lib/ceph/osd/${CLUSTER}-${OSD_ID}/keyring
+
+		# Add the OSD to the CRUSH map
+		if [ ! -n "${HOSTNAME}" ]; then
+			echo "HOSTNAME not set; cannot add OSD to CRUSH map"
+			exit 1
+		fi
+		OSD_WEIGHT=$(df -P -k /var/lib/ceph/osd/${CLUSTER}-$OSD_ID/ | tail -1 | awk '{ d= $2/1073741824 ; r = sprintf("%.2f", d); print r }')
+		ceph ${CEPH_OPTS} --name=osd.${OSD_ID} --keyring=/var/lib/ceph/osd/${CLUSTER}-${OSD_ID}/keyring osd crush create-or-move -- ${OSD_ID} ${OSD_WEIGHT} ${CRUSH_LOCATION}
+	fi
+
   # pick one osd and make sure no lock is held
   for OSD_ID in $(ls /var/lib/ceph/osd |  awk 'BEGIN { FS = "-" } ; { print $2 }'); do
     if [[ -n "$(find /var/lib/ceph/osd/${CLUSTER}-${OSD_ID} -prune -empty)" ]]; then
