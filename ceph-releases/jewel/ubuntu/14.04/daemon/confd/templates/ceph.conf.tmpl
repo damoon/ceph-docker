@@ -43,6 +43,7 @@
   {{base .Key}} = {{.Value}}{{end}}
   osd max object name len = 256
   osd max object namespace len = 64
+  osd journal size = 2048
 
 [mds]
 {{range gets "/mds/*"}}
